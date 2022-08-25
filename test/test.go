@@ -639,7 +639,7 @@ func nextServerOpts(opts *server.Options) *server.Options {
 	return nopts
 }
 
-func createDir(t *testing.T, prefix string) string {
+func createDir(t testing.TB, prefix string) string {
 	t.Helper()
 	if err := os.MkdirAll(tempRoot, 0700); err != nil {
 		t.Fatal(err)
@@ -651,7 +651,7 @@ func createDir(t *testing.T, prefix string) string {
 	return dir
 }
 
-func createFile(t *testing.T, prefix string) *os.File {
+func createFile(t testing.TB, prefix string) *os.File {
 	t.Helper()
 	if err := os.MkdirAll(tempRoot, 0700); err != nil {
 		t.Fatal(err)
@@ -659,7 +659,7 @@ func createFile(t *testing.T, prefix string) *os.File {
 	return createFileAtDir(t, tempRoot, prefix)
 }
 
-func createFileAtDir(t *testing.T, dir, prefix string) *os.File {
+func createFileAtDir(t testing.TB, dir, prefix string) *os.File {
 	t.Helper()
 	f, err := ioutil.TempFile(dir, prefix)
 	if err != nil {
@@ -668,14 +668,14 @@ func createFileAtDir(t *testing.T, dir, prefix string) *os.File {
 	return f
 }
 
-func removeDir(t *testing.T, dir string) {
+func removeDir(t testing.TB, dir string) {
 	t.Helper()
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func removeFile(t *testing.T, p string) {
+func removeFile(t testing.TB, p string) {
 	t.Helper()
 	if err := os.Remove(p); err != nil {
 		t.Fatal(err)

@@ -65,7 +65,7 @@ func newOptionsFromContent(t *testing.T, content []byte) (*Options, string) {
 	return opts, tmpFile
 }
 
-func createConfFile(t *testing.T, content []byte) string {
+func createConfFile(t testing.TB, content []byte) string {
 	t.Helper()
 	conf := createFile(t, "")
 	fName := conf.Name()
