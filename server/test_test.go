@@ -148,14 +148,14 @@ func checkNatsError(t *testing.T, e *ApiError, id ErrorIdentifier) {
 
 // Creates a full cluster with numServers and given name and makes sure its well formed.
 // Will have Gateways and Leaf Node connections active.
-func createClusterWithName(t *testing.T, clusterName string, numServers int, connectTo ...*cluster) *cluster {
+func createClusterWithName(t testing.TB, clusterName string, numServers int, connectTo ...*cluster) *cluster {
 	t.Helper()
 	return createClusterEx(t, false, 5*time.Millisecond, true, clusterName, numServers, connectTo...)
 }
 
 // Creates a cluster and optionally additional accounts and users.
 // Will have Gateways and Leaf Node connections active.
-func createClusterEx(t *testing.T, doAccounts bool, gwSolicit time.Duration, waitOnGWs bool, clusterName string, numServers int, connectTo ...*cluster) *cluster {
+func createClusterEx(t testing.TB, doAccounts bool, gwSolicit time.Duration, waitOnGWs bool, clusterName string, numServers int, connectTo ...*cluster) *cluster {
 	t.Helper()
 
 	if clusterName == "" || numServers < 1 {

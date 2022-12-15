@@ -40,7 +40,7 @@ func init() {
 }
 
 // Wait for the expected number of outbound gateways, or fails.
-func waitForOutboundGateways(t *testing.T, s *Server, expected int, timeout time.Duration) {
+func waitForOutboundGateways(t testing.TB, s *Server, expected int, timeout time.Duration) {
 	t.Helper()
 	if timeout < 2*time.Second {
 		timeout = 2 * time.Second
