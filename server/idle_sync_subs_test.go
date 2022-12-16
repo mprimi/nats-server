@@ -14,6 +14,7 @@
 package server
 
 import (
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -22,18 +23,24 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-func TestIdleSynchronousSubscriptionOOM(t *testing.T) {
-	const clusterSize = 1
-	const numConnections = 1
-	const numSubscriptions = 5_000
+// POC for how issue https://github.com/nats-io/nats.go/issues/1163 can affect server.
+// Here a single NATS client can cause memory to build up in a cluster of JS servers.
+// This is because messages are published with a given subject faster than the cluster can commit them to the stream.
+func TestSlowConsumerOOM(t *testing.T) {
+	const KiB = 1024
+	const MiB = 1024 * KiB
+	const GiB = 1024 * MiB
+
+	const clusterSize = 5
 	const subjectLength = 10
-	const msgSize = 10000
+	const msgSize = 1 * MiB
 	const numMsg = 10_000_000
 
 	subject := strings.Repeat("s", subjectLength)
+	t.Logf("Subject: %s", subject)
 
 	// Create cluster with given number of servers
-	cluster := createClusterWithName(t, "sync_sub_oom", clusterSize)
+	cluster := createJetStreamClusterExplicit(t, "slow_consumer_OOM", clusterSize)
 	for _, server := range cluster.servers {
 		if err := server.readyForConnections(3 * time.Second); err != nil {
 			t.Fatalf("timeout waiting for server: %v", err)
@@ -41,62 +48,42 @@ func TestIdleSynchronousSubscriptionOOM(t *testing.T) {
 	}
 	defer cluster.shutdown()
 
-	// Error handler that mutes the (expected) flood of nats.ErrSlowConsumer
-	handleSubError := func(conn *nats.Conn, s *nats.Subscription, err error) {
-		if err == nats.ErrSlowConsumer {
-			// noop
-		} else {
-			t.Logf("%v", err)
-		}
-	}
-
-	// Create connections
-	connections := make([]*nats.Conn, numConnections)
-	for i := 0; i < numConnections; i++ {
-		nc, err := nats.Connect(cluster.randomServer().ClientURL(), nats.ErrorHandler(handleSubError))
-		if err != nil {
-			t.Fatalf("failed to connect: %v", err)
-		}
-		connections[i] = nc
-	}
-	defer func() {
-		for _, nc := range connections {
-			if nc != nil {
-				nc.Close()
-			}
-		}
-	}()
-
-	// Create subscriptions, round-robin over established connections
-	subscriptions := make([]*nats.Subscription, numSubscriptions)
-	for i := 0; i < numSubscriptions; i++ {
-		nc := connections[i%numConnections]
-		sub, err := nc.SubscribeSync(subject)
-		if err != nil {
-			t.Fatalf("failed to subscribe: %v", err)
-		}
-		subscriptions[i] = sub
-	}
-	defer func() {
-		for _, sub := range subscriptions {
-			if sub != nil {
-				_ = sub.Unsubscribe()
-			}
-		}
-	}()
-
-	// Create connection for publisher
 	nc, err := nats.Connect(cluster.randomServer().ClientURL())
 	if err != nil {
 		t.Fatalf("failed to connect: %v", err)
 	}
 	defer nc.Close()
 
+	// Create a stream with the given subject
+	js, err := nc.JetStream()
+	streamName := fmt.Sprintf("stream-%s", subject)
+	streamCfg := nats.StreamConfig{
+		Name:     streamName,
+		Subjects: []string{subject},
+		MaxMsgs:  100, // Amount doesn't matter, just to avoid filling disk space
+		Discard:  DiscardOld,
+		Replicas: clusterSize,
+	}
+	_, err = js.AddStream(&streamCfg)
+	if err != nil {
+		t.Fatalf("Failed to create stream: %v", err)
+	}
+
+	// Create multiple connections to publish from (one per server to slow down and create more contention)
+	connections := make([]*nats.Conn, clusterSize)
+	for i, server := range cluster.servers {
+		connections[i], err = nats.Connect(server.ClientURL())
+		if err != nil {
+			t.Fatalf("Failed to connect: %v", err)
+		}
+	}
+
 	ticker := time.NewTicker(1 * time.Second)
+	streamInfoTicker := time.NewTicker(3 * time.Second)
 
 	data := make([]byte, msgSize)
 	for i := 0; i < numMsg; i++ {
-		err := nc.Publish(subject, data)
+		err := connections[i%clusterSize].Publish(subject, data)
 		if err != nil {
 			t.Fatalf("failed to publish: %v", err)
 		}
@@ -106,12 +93,19 @@ func TestIdleSynchronousSubscriptionOOM(t *testing.T) {
 			memStats := runtime.MemStats{}
 			runtime.ReadMemStats(&memStats)
 			t.Logf(
-				"Published %d messages (%d MiB), runtime mem: %d MiB",
+				"Published %d messages (%d MiB), runtime mem: %d GiB",
 				i,
-				(i*msgSize)/(1024*1024),
-				memStats.Alloc/(1024*1024),
+				(i*msgSize)/MiB,
+				memStats.Alloc/GiB,
 			)
-
+		case <-streamInfoTicker.C:
+			si, err := js.StreamInfo(streamName)
+			if err != nil {
+				t.Errorf("Failed to get stream %s info: %v", streamName, err)
+			} else {
+				ss := si.State
+				t.Logf("Stream %s: %d messages %d MiB", streamName, ss.Msgs, ss.Bytes/MiB)
+			}
 		default:
 			// Continue publishing
 		}
