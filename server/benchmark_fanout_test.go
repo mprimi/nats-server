@@ -24,55 +24,35 @@ import (
 
 func BenchmarkFanout(b *testing.B) {
 
-	type subscriptionType string
-	const (
-		// Synchronous subscribe, does not consume any of the messages
-		idleSync subscriptionType = "SynchronousIdle"
-		// Asynchronous subscribe with default options and noop handler
-		noopAsync subscriptionType = "AsynchronousNoop"
-	)
-
-	type TestParameters struct {
+	type BenchmarkParameters struct {
 		clusterSize      int
 		numConnections   int
 		numSubscriptions int
 		subjectSize      int
 		msgSize          int64
-		subType          subscriptionType
 	}
 
-	createFanoutBenchmark := func(p TestParameters) (string, func(b *testing.B)) {
+	// Percent of messages published that each subscription must receive in order to pass the test
+	const deliveryThresholdPercent = 95
+
+	createFanoutBenchmark := func(bp BenchmarkParameters) (string, func(b *testing.B)) {
 		name := fmt.Sprintf(
-			"SubType=%s,N=%d,Conn=%d,Sub=%d,SubjSz=%d,MsgSz=%d",
-			p.subType,
-			p.clusterSize,
-			p.numConnections,
-			p.numSubscriptions,
-			p.subjectSize,
-			p.msgSize,
+			"N=%d,Conn=%d,Sub=%d,SubjSz=%d,MsgSz=%d",
+			bp.clusterSize,
+			bp.numConnections,
+			bp.numSubscriptions,
+			bp.subjectSize,
+			bp.msgSize,
 		)
 
-		subject := strings.Repeat("s", p.subjectSize)
-
-		var subscribe func(nc *nats.Conn) (*nats.Subscription, error)
-		switch p.subType {
-		case idleSync:
-			subscribe = func(nc *nats.Conn) (*nats.Subscription, error) {
-				// Synchronous subscription, never consumed
-				// Expect a lot of 'slow consumer' warnings
-				return nc.SubscribeSync(subject)
-			}
-		case noopAsync:
-			subscribe = func(nc *nats.Conn) (*nats.Subscription, error) {
-				// Asynchronous NOOP subscription
-				return nc.Subscribe(subject, func(msg *nats.Msg) {})
-			}
-		}
+		subject := strings.Repeat("s", bp.subjectSize)
 
 		return name, func(b *testing.B) {
 
+			deliverThreshold := int64((b.N * deliveryThresholdPercent) / 100)
+
 			// Create cluster with given number of servers
-			cluster := createClusterWithName(b, "fanout-test", p.clusterSize)
+			cluster := createClusterWithName(b, "fanout-test", bp.clusterSize)
 			for _, server := range cluster.servers {
 				if err := server.readyForConnections(3 * time.Second); err != nil {
 					b.Fatalf("timeout waiting for server: %v", err)
@@ -90,8 +70,8 @@ func BenchmarkFanout(b *testing.B) {
 			}
 
 			// Create connections
-			connections := make([]*nats.Conn, p.numConnections)
-			for i := 0; i < p.numConnections; i++ {
+			connections := make([]*nats.Conn, bp.numConnections)
+			for i := 0; i < bp.numConnections; i++ {
 				nc, err := nats.Connect(cluster.randomServer().ClientURL(), nats.ErrorHandler(handleSubError))
 				if err != nil {
 					b.Fatalf("failed to connect: %v", err)
@@ -107,10 +87,30 @@ func BenchmarkFanout(b *testing.B) {
 			}()
 
 			// Create subscriptions, round-robin over established connections
-			subscriptions := make([]*nats.Subscription, p.numSubscriptions)
-			for i := 0; i < p.numSubscriptions; i++ {
-				nc := connections[i%p.numConnections]
-				sub, err := subscribe(nc)
+			subscriptions := make([]*nats.Subscription, bp.numSubscriptions)
+			subscriptionCounters := make([]int64, bp.numSubscriptions)
+			subscriptionDoneCh := make(chan bool, bp.numSubscriptions)
+
+			createMessageHandler := func(subIndex int) func(msg *nats.Msg) {
+				return func(msg *nats.Msg) {
+					subscriptionCounters[subIndex] += 1
+					if subscriptionCounters[subIndex] >= deliverThreshold {
+						if msg.Sub != subscriptions[subIndex] {
+							b.Fatalf("sub mismatch: %v != %v", msg.Sub, subscriptions[subIndex])
+						}
+						err := subscriptions[subIndex].Unsubscribe()
+						if err != nil {
+							b.Logf("Failed to unsubscribe: %v", err)
+						}
+						subscriptions[subIndex] = nil
+						subscriptionDoneCh <- true
+					}
+				}
+			}
+
+			for i := 0; i < bp.numSubscriptions; i++ {
+				nc := connections[i%bp.numConnections]
+				sub, err := nc.Subscribe(subject, createMessageHandler(i))
 				if err != nil {
 					b.Fatalf("failed to subscribe: %v", err)
 				}
@@ -133,31 +133,46 @@ func BenchmarkFanout(b *testing.B) {
 
 			// Start the benchmark
 			b.ResetTimer()
-			b.SetBytes(p.msgSize)
-			data := make([]byte, p.msgSize)
+			b.SetBytes(bp.msgSize)
+			data := make([]byte, bp.msgSize)
 			for i := 0; i < b.N; i++ {
 				err := nc.Publish(subject, data)
 				if err != nil {
 					b.Fatalf("failed to publish: %v", err)
 				}
 			}
+
+			subDoneCounter := 0
+			for {
+				select {
+				case _ = <-subscriptionDoneCh:
+					subDoneCounter += 1
+					if subDoneCounter == bp.numSubscriptions {
+						return
+					}
+				case <-time.After(3 * time.Second):
+					b.Fatalf(
+						"Timeout, %d/%d subscription received at least %d/%d messages",
+						subDoneCounter,
+						bp.numSubscriptions,
+						deliverThreshold,
+						b.N,
+					)
+				}
+			}
 		}
 	}
 
-	// Create tests table
-	testCases := []TestParameters{}
-
-	subscriberTypeCases := []subscriptionType{idleSync, noopAsync}
-	for _, subscriberType := range subscriberTypeCases {
-		testCases = append(testCases,
-			TestParameters{clusterSize: 1, numConnections: 1, numSubscriptions: 1, subjectSize: 1, msgSize: 10, subType: subscriberType},
-			TestParameters{clusterSize: 1, numConnections: 10, numSubscriptions: 10, subjectSize: 10, msgSize: 10, subType: subscriberType},
-			TestParameters{clusterSize: 1, numConnections: 100, numSubscriptions: 100, subjectSize: 10, msgSize: 100, subType: subscriberType},
-			TestParameters{clusterSize: 3, numConnections: 100, numSubscriptions: 100, subjectSize: 10, msgSize: 100, subType: subscriberType},
-			TestParameters{clusterSize: 3, numConnections: 100, numSubscriptions: 1000, subjectSize: 10, msgSize: 100, subType: subscriberType},
-			TestParameters{clusterSize: 3, numConnections: 1000, numSubscriptions: 1000, subjectSize: 10, msgSize: 1000, subType: subscriberType},
-			TestParameters{clusterSize: 5, numConnections: 1000, numSubscriptions: 10000, subjectSize: 10, msgSize: 1000, subType: subscriberType},
-		)
+	// Table of parametrized benchmarks
+	testCases := []BenchmarkParameters{
+		{clusterSize: 1, numConnections: 1, numSubscriptions: 1, subjectSize: 1, msgSize: 10},
+		{clusterSize: 1, numConnections: 10, numSubscriptions: 10, subjectSize: 10, msgSize: 10},
+		{clusterSize: 1, numConnections: 100, numSubscriptions: 100, subjectSize: 10, msgSize: 100},
+		{clusterSize: 3, numConnections: 100, numSubscriptions: 100, subjectSize: 10, msgSize: 100},
+		{clusterSize: 3, numConnections: 100, numSubscriptions: 1000, subjectSize: 10, msgSize: 100},
+		{clusterSize: 3, numConnections: 100, numSubscriptions: 5000, subjectSize: 10, msgSize: 100},
+		{clusterSize: 5, numConnections: 1000, numSubscriptions: 1000, subjectSize: 10, msgSize: 100},
+		{clusterSize: 5, numConnections: 100, numSubscriptions: 100, subjectSize: 10, msgSize: 1000},
 	}
 
 	b.Logf("Fanout benchmark %d test cases", len(testCases))
