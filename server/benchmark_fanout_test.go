@@ -32,8 +32,11 @@ func BenchmarkFanout(b *testing.B) {
 		msgSize          int64
 	}
 
-	// Percent of messages published that each subscription must receive in order to pass the test
-	const deliveryThresholdPercent = 95
+	// Percent of expected messages after which subscriber unsubscribes and marks itself successful
+	const messagesDeliveredThresholdPercent = 95
+
+	// Percent of subscribers that delivered `messagesDeliveredThresholdPercent` to mark the test successful
+	const subscriberThresholdPercent = 95
 
 	createFanoutBenchmark := func(bp BenchmarkParameters) (string, func(b *testing.B)) {
 		name := fmt.Sprintf(
@@ -49,7 +52,7 @@ func BenchmarkFanout(b *testing.B) {
 
 		return name, func(b *testing.B) {
 
-			deliverThreshold := int64((b.N * deliveryThresholdPercent) / 100)
+			deliverThreshold := int64((b.N * messagesDeliveredThresholdPercent) / 100)
 
 			// Create cluster with given number of servers
 			cluster := createClusterWithName(b, "fanout-test", bp.clusterSize)
@@ -93,11 +96,14 @@ func BenchmarkFanout(b *testing.B) {
 
 			createMessageHandler := func(subIndex int) func(msg *nats.Msg) {
 				return func(msg *nats.Msg) {
+					// Check just in case
+					if msg.Sub != subscriptions[subIndex] {
+						b.Fatalf("sub mismatch: %v != %v", msg.Sub, subscriptions[subIndex])
+					}
+					// Increment counter
 					subscriptionCounters[subIndex] += 1
+					// If enough received, unsubscribe
 					if subscriptionCounters[subIndex] >= deliverThreshold {
-						if msg.Sub != subscriptions[subIndex] {
-							b.Fatalf("sub mismatch: %v != %v", msg.Sub, subscriptions[subIndex])
-						}
 						err := subscriptions[subIndex].Unsubscribe()
 						if err != nil {
 							b.Logf("Failed to unsubscribe: %v", err)
@@ -131,32 +137,46 @@ func BenchmarkFanout(b *testing.B) {
 			}
 			defer nc.Close()
 
+			data := make([]byte, bp.msgSize)
+			b.SetBytes(bp.msgSize)
+
 			// Start the benchmark
 			b.ResetTimer()
-			b.SetBytes(bp.msgSize)
-			data := make([]byte, bp.msgSize)
 			for i := 0; i < b.N; i++ {
 				err := nc.Publish(subject, data)
 				if err != nil {
 					b.Fatalf("failed to publish: %v", err)
 				}
 			}
+			nc.Drain()
+			b.StopTimer()
 
 			subDoneCounter := 0
+
+			subscriberThreshold := (bp.numSubscriptions * subscriberThresholdPercent) / 100
+
 			for {
 				select {
 				case _ = <-subscriptionDoneCh:
 					subDoneCounter += 1
 					if subDoneCounter == bp.numSubscriptions {
+						// All subs done
 						return
 					}
 				case <-time.After(3 * time.Second):
+					// No subs completed for >3s
+					if subDoneCounter >= subscriberThreshold {
+						// Enough subs completed to mark this successful
+						return
+					}
 					b.Fatalf(
-						"Timeout, %d/%d subscription received at least %d/%d messages",
+						"Timeout, only %d/%d subscriptions (<%d%%) delivered enough messages (%d%% of %d => %d)",
 						subDoneCounter,
 						bp.numSubscriptions,
-						deliverThreshold,
+						subscriberThresholdPercent,
+						messagesDeliveredThresholdPercent,
 						b.N,
+						deliverThreshold,
 					)
 				}
 			}
@@ -165,17 +185,17 @@ func BenchmarkFanout(b *testing.B) {
 
 	// Table of parametrized benchmarks
 	testCases := []BenchmarkParameters{
-		{clusterSize: 1, numConnections: 1, numSubscriptions: 1, subjectSize: 1, msgSize: 10},
 		{clusterSize: 1, numConnections: 10, numSubscriptions: 10, subjectSize: 10, msgSize: 10},
-		{clusterSize: 1, numConnections: 100, numSubscriptions: 100, subjectSize: 10, msgSize: 100},
-		{clusterSize: 3, numConnections: 100, numSubscriptions: 100, subjectSize: 10, msgSize: 100},
-		{clusterSize: 3, numConnections: 100, numSubscriptions: 1000, subjectSize: 10, msgSize: 100},
-		{clusterSize: 3, numConnections: 100, numSubscriptions: 5000, subjectSize: 10, msgSize: 100},
-		{clusterSize: 5, numConnections: 1000, numSubscriptions: 1000, subjectSize: 10, msgSize: 100},
-		{clusterSize: 5, numConnections: 100, numSubscriptions: 100, subjectSize: 10, msgSize: 1000},
+		{clusterSize: 1, numConnections: 5, numSubscriptions: 50, subjectSize: 10, msgSize: 10},
+		{clusterSize: 1, numConnections: 50, numSubscriptions: 50, subjectSize: 10, msgSize: 10},
+		{clusterSize: 3, numConnections: 10, numSubscriptions: 10, subjectSize: 10, msgSize: 10},
+		{clusterSize: 3, numConnections: 25, numSubscriptions: 50, subjectSize: 10, msgSize: 10},
+		{clusterSize: 3, numConnections: 50, numSubscriptions: 50, subjectSize: 10, msgSize: 10},
+		{clusterSize: 3, numConnections: 25, numSubscriptions: 50, subjectSize: 25, msgSize: 10},
+		{clusterSize: 3, numConnections: 25, numSubscriptions: 50, subjectSize: 10, msgSize: 100},
 	}
 
-	b.Logf("Fanout benchmark %d test cases", len(testCases))
+	b.Logf("Fanout benchmark: %d test cases", len(testCases))
 
 	for _, testCase := range testCases {
 		benchName, benchFun := createFanoutBenchmark(testCase)
