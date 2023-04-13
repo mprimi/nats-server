@@ -128,7 +128,13 @@ var jsClusterAccountsTempl = `
 var jsClusterTempl = `
 	listen: 127.0.0.1:-1
 	server_name: %s
-	jetstream: {max_mem_store: 256MB, max_file_store: 2GB, store_dir: '%s'}
+	jetstream: {
+		max_mem_store: 256MB
+		max_file_store: 2GB
+		store_dir: '%s'
+		cipher: aes
+		key : "6dYfBV0zzEkR3vxZCNjxmnVh/aIqgid1"
+}
 
 	leaf {
 		listen: 127.0.0.1:-1
