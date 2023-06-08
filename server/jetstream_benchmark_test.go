@@ -1048,17 +1048,16 @@ func BenchmarkJetStreamKV(b *testing.B) {
 		numKeys     int
 		valueSize   int
 	}{
-		{1, 1, 1, 100, 100},    // 1 node, 1 bucket with 100 keys, 100B values
-		{1, 1, 10, 1000, 100},  // 1 node, 10 buckets with 1000 keys, 100B values
-		{3, 3, 1, 100, 100},    // 3 nodes, 1 bucket with 100 keys, 100B values
-		{3, 3, 10, 1000, 100},  // 3 nodes, 10 buckets with 1000 keys, 100B values
-		{3, 3, 10, 1000, 1024}, // 3 nodes, 10 buckets with 1000 keys, 1KB values
+		{1, 1, 1, 100, 64},
+		{1, 1, 1, 100, 256},
+		{1, 1, 1, 100, 1024},
+		{1, 1, 1, 100, 4092},
+		{1, 1, 1, 100, 16368},
+		{1, 1, 1, 100, 65472},
 	}
 
 	workloadCases := []WorkloadType{
 		Get,
-		Put,
-		Update,
 	}
 
 	for _, bc := range benchmarksCases {
