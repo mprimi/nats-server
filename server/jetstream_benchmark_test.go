@@ -1048,17 +1048,18 @@ func BenchmarkJetStreamKV(b *testing.B) {
 		numKeys     int
 		valueSize   int
 	}{
-		{1, 1, 1, 100, 100},    // 1 node, 1 bucket with 100 keys, 100B values
-		{1, 1, 10, 1000, 100},  // 1 node, 10 buckets with 1000 keys, 100B values
-		{3, 3, 1, 100, 100},    // 3 nodes, 1 bucket with 100 keys, 100B values
-		{3, 3, 10, 1000, 100},  // 3 nodes, 10 buckets with 1000 keys, 100B values
-		{3, 3, 10, 1000, 1024}, // 3 nodes, 10 buckets with 1000 keys, 1KB values
+		// {1, 1, 1, 100, 100},    // 1 node, 1 bucket with 100 keys, 100B values
+		// {1, 1, 10, 1000, 100},  // 1 node, 10 buckets with 1000 keys, 100B values
+		// {3, 3, 1, 100, 100},    // 3 nodes, 1 bucket with 100 keys, 100B values
+		// {3, 3, 10, 1000, 100},  // 3 nodes, 10 buckets with 1000 keys, 100B values
+		// {3, 3, 10, 1000, 1024}, // 3 nodes, 10 buckets with 1000 keys, 1KB values
+		{3, 3, 10, 1000, 1024},
 	}
 
 	workloadCases := []WorkloadType{
 		Get,
 		Put,
-		Update,
+		// Update,
 	}
 
 	for _, bc := range benchmarksCases {
@@ -1253,20 +1254,20 @@ func BenchmarkJetStreamObjStore(b *testing.B) {
 		maxObjSz int
 	}{
 		// TODO remove duplicates and fix comments
-		{nats.MemoryStorage, 100, 1024, 102400},     // mem storage, 100 objects sized (1KB-100KB)
-		{nats.MemoryStorage, 100, 102400, 1048576},  // mem storage, 100 objects sized (100KB-1MB)
-		{nats.MemoryStorage, 1000, 10240, 102400},   // mem storage, 1k objects of various size (10KB - 100KB)
-		{nats.FileStorage, 100, 1024, 102400},       // file storage, 100 objects sized (1KB-100KB)
-		{nats.FileStorage, 1000, 10240, 1048576},    // file storage, 1k objects of various size (10KB - 1MB)
-		{nats.FileStorage, 100, 102400, 1048576},    // file storage, 100 objects sized (100KB-1MB)
-		{nats.FileStorage, 100, 1048576, 10485760},  // file storage, 100 objects sized (1MB-10MB)
-		{nats.FileStorage, 10, 10485760, 104857600}, // file storage, 10 objects sized (10MB-100MB)
-
+		// {nats.MemoryStorage, 100, 1024, 102400},     // mem storage, 100 objects sized (1KB-100KB)
+		// {nats.MemoryStorage, 100, 102400, 1048576},  // mem storage, 100 objects sized (100KB-1MB)
+		// {nats.MemoryStorage, 1000, 10240, 102400},   // mem storage, 1k objects of various size (10KB - 100KB)
+		// {nats.FileStorage, 100, 1024, 102400},       // file storage, 100 objects sized (1KB-100KB)
+		// {nats.FileStorage, 1000, 10240, 1048576},    // file storage, 1k objects of various size (10KB - 1MB)
+		// {nats.FileStorage, 100, 102400, 1048576},    // file storage, 100 objects sized (100KB-1MB)
+		// {nats.FileStorage, 100, 1048576, 10485760},  // file storage, 100 objects sized (1MB-10MB)
+		// {nats.FileStorage, 10, 10485760, 104857600}, // file storage, 10 objects sized (10MB-100MB)
+		{nats.FileStorage, 1000, 1024, 1024},
 	}
 
 	var (
-		clusterSizeCases = []int{1, 3}
-		rwRatioCases     = []float64{ReadOnly, WriteOnly, 0.8}
+		clusterSizeCases = []int{3}
+		rwRatioCases     = []float64{ReadOnly, WriteOnly}
 	)
 
 	// Test with either single node or 3 node cluster
