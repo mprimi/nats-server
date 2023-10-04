@@ -1303,6 +1303,7 @@ func (n *raft) setupLastSnapshot() {
 // loadLastSnapshot will load and return our last snapshot.
 // Lock should be held.
 func (n *raft) loadLastSnapshot() (*snapshot, error) {
+
 	if n.snapfile == _EMPTY_ {
 		return nil, errNoSnapAvailable
 	}

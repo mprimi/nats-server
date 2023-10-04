@@ -1896,3 +1896,203 @@ func TestNRGHealthCheckWaitForDoubleCatchup(t *testing.T) {
 	n.Applied(3)
 	require_True(t, n.Healthy())
 }
+
+// This is a RaftChainOfBlocks test where a block is proposed and then we wait for all replicas to apply it before
+// proposing the next one.
+// The test may fail if:
+//   - Replicas hash diverge
+//   - One replica never applies the N-th block applied by the rest
+//   - The given number of blocks cannot be applied within some amount of time
+func TestNRGChainOfBlocksRunInLockstep(t *testing.T) {
+	const iterations = 50
+	const timeout = iterations * time.Second
+	//RCOBOptions.verbose = true
+
+	c := createJetStreamClusterExplicit(t, "R3S", 3)
+	defer c.shutdown()
+
+	rg := c.createRaftGroup("TEST", 3, newRaftChainStateMachine)
+	rg.waitOnLeader()
+
+	for iteration := uint64(1); iteration <= iterations; iteration++ {
+		rg.randomMember().(*RCOBStateMachine).proposeBlock()
+
+		// Wait on participants to converge
+		var previousNodeName string
+		var previousNodeHash string
+
+		for _, sm := range rg {
+			stateMachine := sm.(*RCOBStateMachine)
+			nodeName := fmt.Sprintf(
+				"%s/%s",
+				stateMachine.server().Name(),
+				stateMachine.node().ID(),
+			)
+			checkFor(t, timeout, 500*time.Millisecond, func() error {
+				running, blocksCount, currentHash := stateMachine.getCurrentHash()
+				// All nodes always running
+				if !running {
+					return fmt.Errorf(
+						"node %s is not running",
+						nodeName,
+					)
+				}
+				// Node is behind
+				if blocksCount != iteration {
+					return fmt.Errorf(
+						"node %s applied %d blocks out of %d expected",
+						nodeName,
+						blocksCount,
+						iteration,
+					)
+				}
+				// Make sure hash is not empty
+				if currentHash == "" {
+					return fmt.Errorf(
+						"node %s has empty hash after applying %d blocks",
+						nodeName,
+						blocksCount,
+					)
+				}
+				// Check against previous node hash, unless this is the first node and we don't have anyone to compare
+				if previousNodeHash != "" && previousNodeHash != currentHash {
+					return fmt.Errorf(
+						"hash mismatch after %d blocks: %s hash: %s != %s hash: %s",
+						iteration,
+						nodeName,
+						currentHash,
+						previousNodeName,
+						previousNodeHash,
+					)
+				}
+				// Set node name and hash for next node to compare against
+				previousNodeName, previousNodeHash = nodeName, currentHash
+				// All is well
+				return nil
+			})
+		}
+		t.Logf(
+			"Verified chain hash %s for %d/%d nodes after %d/%d iterations",
+			previousNodeHash,
+			len(rg),
+			len(rg),
+			iteration,
+			iterations,
+		)
+	}
+}
+
+// This is a RaftChainOfBlocks test where one of the replicas is stopped before proposing a short burst of blocks.
+// Upon resuming the replica, we check it is able to catch up to the rest.
+// The test may fail if:
+//   - Replicas hash diverge
+//   - One replica never applies the N-th block applied by the rest
+//   - The given number of blocks cannot be applied within some amount of time
+func TestNRGChainOfBlocksStopAndCatchUp(t *testing.T) {
+	const iterations = 50
+	const blocksPerIteration = 3
+	const timeout = 2 * iterations * time.Second
+	//RCOBOptions.verbose = true
+
+	c := createJetStreamClusterExplicit(t, "R3S", 3)
+	defer c.shutdown()
+
+	rg := c.createRaftGroup("TEST", 3, newRaftChainStateMachine)
+	rg.waitOnLeader()
+
+	for iteration := uint64(1); iteration <= iterations; iteration++ {
+
+		// Stop a random node
+		stoppedNode := rg.randomMember()
+		leader := stoppedNode.node().Leader()
+		stoppedNode.stop()
+
+		t.Logf(
+			"Iteration %d/%d: stopping node: %s/%s (leader: %v)",
+			iteration,
+			iterations,
+			stoppedNode.server().Name(),
+			stoppedNode.node().ID(),
+			leader,
+		)
+
+		// Propose some new blocks
+		rg.waitOnLeader()
+		for i := 0; i < blocksPerIteration; i++ {
+			proposer := rg.randomMember()
+			// Pick again if we randomly chose the stopped node
+			for proposer == stoppedNode {
+				proposer = rg.randomMember()
+			}
+
+			proposer.(*RCOBStateMachine).proposeBlock()
+		}
+
+		// Restart the stopped node
+		stoppedNode.restart()
+
+		// Wait on participants to converge
+		var previousNodeName string
+		var previousNodeHash string
+		expectedBlocks := iteration * blocksPerIteration
+		for _, sm := range rg {
+			stateMachine := sm.(*RCOBStateMachine)
+			nodeName := fmt.Sprintf(
+				"%s/%s",
+				stateMachine.server().Name(),
+				stateMachine.node().ID(),
+			)
+			checkFor(t, timeout, 500*time.Millisecond, func() error {
+				running, blocksCount, currentHash := stateMachine.getCurrentHash()
+				// All nodes should be running
+				if !running {
+					return fmt.Errorf(
+						"node %s not running",
+						nodeName,
+					)
+				}
+				// Node is behind
+				if blocksCount != expectedBlocks {
+					return fmt.Errorf(
+						"node %s applied %d blocks out of %d expected",
+						nodeName,
+						blocksCount,
+						expectedBlocks,
+					)
+				}
+				// Make sure hash is not empty
+				if currentHash == "" {
+					return fmt.Errorf(
+						"node %s has empty hash after applying %d blocks",
+						nodeName,
+						blocksCount,
+					)
+				}
+				// Check against previous node hash, unless this is the first node to be checked
+				if previousNodeHash != "" && previousNodeHash != currentHash {
+					return fmt.Errorf(
+						"hash mismatch after %d blocks: %s hash: %s != %s hash: %s",
+						expectedBlocks,
+						nodeName,
+						currentHash,
+						previousNodeName,
+						previousNodeHash,
+					)
+				}
+				// Set node name and hash for next node to compare against
+				previousNodeName, previousNodeHash = nodeName, currentHash
+				// All is well
+				return nil
+			})
+		}
+		t.Logf(
+			"Verified chain hash %s for %d/%d nodes after %d blocks, %d/%d iterations",
+			previousNodeHash,
+			len(rg),
+			len(rg),
+			expectedBlocks,
+			iteration,
+			iterations,
+		)
+	}
+}
