@@ -1560,7 +1560,7 @@ func BenchmarkJetStreamObjStore(b *testing.B) {
 	}
 }
 
-func BenchmarkJetStreamMultiProducer(b *testing.B) {
+func BenchmarkJetStreamProduceConcurrent(b *testing.B) {
 	const (
 		subject    = "test-subject"
 		streamName = "test-stream"
