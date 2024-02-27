@@ -1279,7 +1279,7 @@ func (js *jetStream) monitorCluster() {
 			s.Warnf("%v", hs.Error)
 		}
 		// Also check for orphaned NRGs.
-		s.checkForNRGOrphans()
+		//s.checkForNRGOrphans()
 	}
 
 	var (
