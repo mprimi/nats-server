@@ -163,7 +163,8 @@ func (o *chainOfBlocksObserver) publishLoop() {
 func newChainOfBlocksObserver(groupName string) (*chainOfBlocksObserver, error) {
 	// TODO hardcoded connect string
 	nc, err := nats.Connect(
-		"nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224,",
+		//"nats://127.0.0.1:4222,nats://127.0.0.1:4223,nats://127.0.0.1:4224,",
+		"nats://127.0.0.1:17001,nats://127.0.0.1:17002,nats://127.0.0.1:17003,nats://127.0.0.1:17004,nats://127.0.0.1:17005,",
 		nats.MaxReconnects(-1),
 	)
 	if err != nil {
