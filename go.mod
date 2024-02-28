@@ -17,6 +17,7 @@ require (
 )
 
 require (
+	github.com/antithesishq/antithesis-sdk-go v0.3.8 // indirect
 	github.com/golang/protobuf v1.4.2 // indirect
 	google.golang.org/protobuf v1.23.0 // indirect
 )
