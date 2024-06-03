@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/antithesishq/antithesis-sdk-go/assert"
 	"math"
 	"math/rand"
 	"os"
@@ -5204,6 +5205,13 @@ func (js *jetStream) processConsumerAssignmentResults(sub *subscription, c *clie
 				cc.meta.Propose(encodeDeleteConsumerAssignment(ca))
 				s.Warnf("Proposing to delete consumer `%s > %s > %s' due to assignment response error: %v",
 					result.Account, result.Stream, result.Consumer, result.Response.Error)
+				assert.AlwaysOrUnreachable(
+					result.Response.Error != NewJSConsumerNameExistError(),
+					"Consumer assignment failed with error: "+result.Response.Error.Description,
+					map[string]any{
+						"consumer": result.Consumer,
+					},
+				)
 			}
 		}
 	}

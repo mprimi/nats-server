@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/antithesishq/antithesis-sdk-go/assert"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -1735,6 +1736,13 @@ func (acc *Account) checkNewConsumerConfig(cfg, ncfg *ConsumerConfig) error {
 		return errors.New("deliver policy can not be updated")
 	}
 	if cfg.OptStartSeq != ncfg.OptStartSeq {
+		assert.Unreachable(
+			"Reached error: start sequence can not be updated",
+			map[string]any{
+				"consumer_config_name": cfg.Name,
+				"cfg.OptStartSeq":      cfg.OptStartSeq,
+				"ncfg.OptStartSeq":     ncfg.OptStartSeq,
+			})
 		return errors.New("start sequence can not be updated")
 	}
 	if cfg.OptStartTime != ncfg.OptStartTime {
