@@ -1079,6 +1079,86 @@ func TestJetStreamConsumerDelete(t *testing.T) {
 	}
 }
 
+// Try this: go test -v ./server --vet=off -count=10 --run=TestJetStreamConsumersSlowCreateAndDelete/single
+func TestJetStreamConsumersSlowCreateAndDelete(t *testing.T) {
+	const MinConsumers, MaxConsumers, Ops = 10, 100, 1000
+
+	// N.B. Set opDelay to zero and the test passes (in <1s)
+	//const opDelay = 0 * time.Millisecond
+	// Set opDelay to 100ms or higher => fails every time (both single server and clustered)
+	const opDelay = 100 * time.Millisecond
+
+	tests := []struct {
+		name     string
+		replicas int
+	}{
+		{"single server", 1},
+		{"clustered", 3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var s *Server
+			if test.replicas == 1 {
+				s = RunBasicJetStreamServer(t)
+				defer s.Shutdown()
+			} else {
+				c := createJetStreamClusterExplicit(t, "R3S", test.replicas)
+				defer c.shutdown()
+				s = c.randomServer()
+			}
+
+			nc, js := jsClientConnect(t, s)
+			defer nc.Close()
+
+			_, err := js.AddStream(&nats.StreamConfig{
+				Name:     "TEST",
+				Subjects: []string{"events.>"},
+				Replicas: test.replicas,
+			})
+			require_NoError(t, err)
+
+			consumers := make([]*nats.ConsumerInfo, 0, MaxConsumers)
+
+			rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+			for i := 0; i < Ops; i++ {
+
+				time.Sleep(opDelay)
+
+				var create bool
+				if len(consumers) <= MinConsumers {
+					create = true
+				} else if len(consumers) == MaxConsumers {
+					create = false
+				} else if rng.Int()%2 == 0 {
+					create = true
+				}
+
+				if create {
+					cName := "consumer_" + strconv.Itoa(i)
+					//t.Logf("Creating consumer: %s", cName)
+					ci, err := js.AddConsumer("TEST", &nats.ConsumerConfig{
+						Name:          cName,
+						FilterSubject: "events." + strconv.Itoa(i),
+						Replicas:      1,
+						MemoryStorage: true,
+					})
+					require_NoError(t, err)
+					consumers = append(consumers, ci)
+				} else {
+					ri := rand.Intn(len(consumers))
+					ci := consumers[ri]
+					//t.Logf("Deleting consumer: %s", ci.Name)
+					err := js.DeleteConsumer("TEST", ci.Name)
+					require_NoError(t, err)
+					consumers[ri], consumers[len(consumers)-1] = consumers[len(consumers)-1], consumers[ri]
+					consumers = consumers[:len(consumers)-1]
+				}
+			}
+		})
+	}
+}
+
 func TestJetStreamConsumerFetchWithDrain(t *testing.T) {
 	test := func(t *testing.T, cc *nats.ConsumerConfig) {
 		s := RunBasicJetStreamServer(t)
