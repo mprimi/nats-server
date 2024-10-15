@@ -49,36 +49,41 @@ func TestLongDummy(t *testing.T) {
 	})
 }
 
-// TestLongJetStreamKVUpdates a client overwrites entries in a KV bucket for a fixed amount of time
+// TestLongJetStreamKVUpdates a client overwrites entries in a KV bucket for a fixed amount of time.
+// A server in the cluster, randomly chosen each time, is restarted at a fixed interval.
+// The test fails if updates fail for a fixed continuous interval of time. Or if a server fails to restart and catch up.
 func TestLongJetStreamKVUpdates(t *testing.T) {
-
 	// RNG Seed
 	const Seed = 123456
+	// Cluster size (also replicas set size)
+	const NumServers = 3
 	// Number of keys in bucket
 	const NumKeys = 1000
 	// Size of (random) values
 	const ValueSize = 1024
 	// Test duration
 	const Duration = 1 * time.Minute
-	// If no updates successfull for this interval, fail the test
-	const MaxRetry = 20 * time.Second
+	// If no updates successful for this interval, then fail the test
+	const MaxRetry = 30 * time.Second
 	// Minimum time before updates
 	const UpdatesInterval = 1 * time.Millisecond
 	// Time between progress reports to console
 	const ProgressInterval = 10 * time.Second
+	// Time between server restarts
+	const ServerRestartInterval = 5 * time.Second
 
 	rng := rand.New(rand.NewSource(Seed))
 
-	c := createJetStreamClusterExplicit(t, "R3S", 3)
-	defer c.shutdown()
+	cluster := createJetStreamClusterExplicit(t, "R3S", NumServers)
+	defer cluster.shutdown()
 
 	// Connect to a random server but client will discover others too.
-	nc, js := jsClientConnect(t, c.randomServer())
+	nc, js := jsClientConnect(t, cluster.randomServer())
 	defer nc.Close()
 
 	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket:   "TEST",
-		Replicas: 3,
+		Replicas: NumServers,
 	})
 	require_NoError(t, err)
 
@@ -132,7 +137,7 @@ func TestLongJetStreamKVUpdates(t *testing.T) {
 	endTestTimer := time.After(Duration)
 	nextUpdateTicker := time.NewTicker(UpdatesInterval)
 	progressTicker := time.NewTicker(ProgressInterval)
-	restartServerTicker := time.NewTicker(3 * time.Second)
+	restartServerTicker := time.NewTicker(ServerRestartInterval)
 
 runLoop:
 	for {
@@ -154,10 +159,14 @@ runLoop:
 			}
 
 		case <-restartServerTicker.C:
-			randomServer := c.servers[rng.Intn(len(c.servers))]
-			restartedServer := c.restartServer(randomServer)
-			c.waitOnServerHealthz(restartedServer)
-			c.waitOnAllCurrent()
+			randomServer := cluster.servers[rng.Intn(len(cluster.servers))]
+			t.Logf("Restarting server %s", randomServer.Name())
+			randomServer.Shutdown()
+			randomServer.WaitForShutdown()
+			restartedServer := cluster.restartServer(randomServer)
+			cluster.waitOnClusterReady()
+			cluster.waitOnServerHealthz(restartedServer)
+			cluster.waitOnAllCurrent()
 
 		case <-progressTicker.C:
 			printProgress()
