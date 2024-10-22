@@ -36,18 +36,6 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-func TestLongDummy(t *testing.T) {
-	// Dummy test to verify tests set of tests are running as expected
-
-	t.Run("Passing sub-test", func(t *testing.T) {
-		t.Logf("Pass!")
-	})
-
-	t.Run("Failing sub-test", func(t *testing.T) {
-		t.Fatalf("Fail!")
-	})
-}
-
 // TestLongJetStreamKVUpdates a client overwrites entries in a KV bucket for a fixed amount of time.
 // A server in the cluster, randomly chosen each time, is restarted at a fixed interval.
 // The test fails if updates fail for a fixed continuous interval of time. Or if a server fails to restart and catch up.
