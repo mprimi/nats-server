@@ -11,16 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This test file is skipped by default (unless the include_js_cluster_long_running_tests tag is set).
-// This is a measure to avoid accidentally running tests here (e.g. `go test ./server`)
-//go:build !skip_js_tests && include_js_cluster_long_running_tests
-// +build !skip_js_tests,include_js_cluster_long_running_tests
+// This test file is skipped by default to avoid accidentally running (e.g. `go test ./server`)
+//go:build !skip_js_tests && include_js_cluster_long_tests
+// +build !skip_js_tests,include_js_cluster_long_tests
 
 package server
 
 import (
 	"context"
-	crand "crypto/rand"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1608,7 +1607,7 @@ func TestLongNoRaceJetStreamClusterInterestStreamConsistencyAfterRollingRestart(
 	wg.Wait()
 
 	msg := make([]byte, 2*1024) // 2k payload
-	crand.Read(msg)
+	rand.Read(msg)
 
 	// Controls if publishing is on or off.
 	var pubActive atomic.Bool
