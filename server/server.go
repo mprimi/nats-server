@@ -2357,7 +2357,7 @@ func (s *Server) Start() {
 		cfg := &JetStreamConfig{
 			StoreDir:     opts.StoreDir,
 			SyncInterval: opts.SyncInterval,
-			SyncAlways:   true, // TEMPORARY for benchmark: Force always sync
+			SyncAlways:   opts.SyncAlways,
 			MaxMemory:    opts.JetStreamMaxMemory,
 			MaxStore:     opts.JetStreamMaxStore,
 			Domain:       opts.JetStreamDomain,
