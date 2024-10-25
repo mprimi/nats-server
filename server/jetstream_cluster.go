@@ -2079,7 +2079,7 @@ func (js *jetStream) createRaftGroup(accName string, rg *raftGroup, storage Stor
 	var store StreamStore
 	if storage == FileStorage {
 		fs, err := newFileStoreWithCreated(
-			FileStoreConfig{StoreDir: storeDir, BlockSize: defaultMediumBlockSize, AsyncFlush: false, SyncInterval: 5 * time.Minute, srv: s},
+			FileStoreConfig{StoreDir: storeDir, BlockSize: defaultMediumBlockSize, AsyncFlush: false, SyncInterval: 5 * time.Minute, srv: s, SyncAlways: true},
 			StreamConfig{Name: rg.Name, Storage: FileStorage, Metadata: labels},
 			time.Now().UTC(),
 			s.jsKeyGen(s.getOpts().JetStreamKey, rg.Name),
