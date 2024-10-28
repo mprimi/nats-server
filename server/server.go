@@ -2364,6 +2364,7 @@ func (s *Server) Start() {
 			CompressOK:   true,
 			UniqueTag:    opts.JetStreamUniqueTag,
 		}
+		s.Warnf("Jetstream configuration, sync interval: %s, always: %v", cfg.SyncInterval, cfg.SyncAlways)
 		if err := s.EnableJetStream(cfg); err != nil {
 			s.Fatalf("Can't start JetStream: %v", err)
 			return

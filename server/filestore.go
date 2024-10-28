@@ -543,6 +543,8 @@ func newFileStoreWithCreated(fcfg FileStoreConfig, cfg StreamConfig, created tim
 	// Spin up the go routine that will write out our full state stream index.
 	go fs.flushStreamStateLoop(fs.qch, fs.fsld)
 
+	fcfg.srv.Warnf("‼️ Create file store %s: sync interval: %s always? %v", fs.fcfg.StoreDir, fs.fcfg.SyncInterval, fcfg.SyncAlways)
+
 	return fs, nil
 }
 

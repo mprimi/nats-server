@@ -411,6 +411,7 @@ func (s *Server) initJetStreamEncryption() (err error) {
 
 // enableJetStream will start up the JetStream subsystem.
 func (s *Server) enableJetStream(cfg JetStreamConfig) error {
+	s.Warnf("‼️ Enable JS - sync interval %s always? %v\n", cfg.SyncInterval.String(), cfg.SyncAlways)
 	js := &jetStream{srv: s, config: cfg, accounts: make(map[string]*jsAccount), apiSubs: NewSublistNoCache()}
 	s.gcbMu.Lock()
 	if s.gcbOutMax = s.getOpts().JetStreamMaxCatchup; s.gcbOutMax == 0 {
