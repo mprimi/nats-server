@@ -36,7 +36,7 @@ func BenchmarkJetStreamConsume(b *testing.B) {
 		subject          = "s"
 		seed             = 12345
 		publishTimeout   = 30 * time.Second
-		PublishBatchSize = 10000
+		PublishBatchSize = 1000
 	)
 
 	runSyncPushConsumer := func(b *testing.B, js nats.JetStreamContext, streamName string) (int, int, int) {
