@@ -678,7 +678,7 @@ func BenchmarkJetStreamPublish(b *testing.B) {
 
 		b.ResetTimer()
 
-		for i := 1; i <= b.N; i++ {
+		for i := 1; published < b.N; i++ {
 			fastRandomMutation(message, 10)
 			subject := subjects[fastrand.Uint32n(uint32(len(subjects)))]
 			_, pubErr := js.Publish(subject, message)
@@ -689,7 +689,7 @@ func BenchmarkJetStreamPublish(b *testing.B) {
 			}
 
 			if verbose && i%1000 == 0 {
-				b.Logf("Published %d/%d, %d errors", i, b.N, errors)
+				b.Logf("Published %d/%d, %d errors", published, b.N, errors)
 			}
 		}
 
@@ -889,8 +889,8 @@ func BenchmarkJetStreamPublish(b *testing.B) {
 							// Benchmark ends here
 							b.StopTimer()
 
-							if published+errors != b.N {
-								b.Fatalf("Something doesn't add up: %d + %d != %d", published, errors, b.N)
+							if published != b.N {
+								b.Fatalf("Unexpected number of messages published:  %d != %d", published, b.N)
 							}
 
 							b.ReportMetric(float64(errors)*100/float64(b.N), "%error")
