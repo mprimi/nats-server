@@ -1255,37 +1255,39 @@ func TestJetStreamClusterStreamOrphanMsgsAndReplicasDrifting(t *testing.T) {
 		testLogf("Pausing %s before consistency checks", ChecksDelay)
 		time.Sleep(ChecksDelay)
 
-		// Compare stream pending with total pending across consumers
-		checkFor(t, ChecksTimeout, time.Second, func() error {
-			var totalConsumersPending uint64
-			for consumer, _ := range consumersMap {
-				ci, err := js.ConsumerInfo(sc.Name, consumer)
-				if err != nil {
-					return fmt.Errorf("failed to get consumer info: %w", err)
+		// If stream is a work queue,compare pending in stream with total pending across consumers
+		if sc.Retention == nats.WorkQueuePolicy {
+			checkFor(t, ChecksTimeout, time.Second, func() error {
+				var totalConsumersPending uint64
+				for consumer, _ := range consumersMap {
+					ci, err := js.ConsumerInfo(sc.Name, consumer)
+					if err != nil {
+						return fmt.Errorf("failed to get consumer info: %w", err)
+					}
+					totalConsumersPending += ci.NumPending
 				}
-				totalConsumersPending += ci.NumPending
-			}
 
-			si, err := js.StreamInfo(sc.Name)
-			if err != nil {
-				return fmt.Errorf("failed to get stream info: %w", err)
-			}
-			streamPending := si.State.Msgs
+				si, err := js.StreamInfo(sc.Name)
+				if err != nil {
+					return fmt.Errorf("failed to get stream info: %w", err)
+				}
+				streamPending := si.State.Msgs
 
-			if streamPending != totalConsumersPending {
-				testLogf(
-					"Pending counts mismatch - stream: %d, consumers: %d",
-					streamPending,
-					totalConsumersPending,
-				)
-				return fmt.Errorf(
-					"pending count mismatch - stream: %d, consumers: %d",
-					streamPending,
-					totalConsumersPending,
-				)
-			}
-			return nil
-		})
+				if streamPending != totalConsumersPending {
+					testLogf(
+						"Pending counts mismatch - stream: %d, consumers: %d",
+						streamPending,
+						totalConsumersPending,
+					)
+					return fmt.Errorf(
+						"pending count mismatch - stream: %d, consumers: %d",
+						streamPending,
+						totalConsumersPending,
+					)
+				}
+				return nil
+			})
+		}
 
 		// If R>1, verify that leader and replicas have the same state
 		if sc.Replicas > 1 {
@@ -1543,11 +1545,10 @@ func TestJetStreamClusterStreamOrphanMsgsAndReplicasDrifting(t *testing.T) {
 			disconnectClients: true,
 		}
 		test(t, params, &nats.StreamConfig{
-			Name:       "OWQTEST_R3F_DO_NOLIMIT",
+			Name:       "TEST_R3F_DO_NOLIMIT",
 			Subjects:   []string{"MSGS.>"},
 			Replicas:   3,
 			Duplicates: 30 * time.Second,
-			Retention:  nats.WorkQueuePolicy,
 			Discard:    nats.DiscardOld,
 			Placement: &nats.Placement{
 				Tags: []string{"test"},
