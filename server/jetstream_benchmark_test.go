@@ -255,12 +255,11 @@ func BenchmarkJetStreamConsume(b *testing.B) {
 		clusterSize int
 		replicas    int
 		messageSize int
-		minMessages int
 	}{
-		{1, 1, 10, 100_000}, // Single node, 10B messages, ~1MiB minimum
-		{1, 1, 1024, 1_000}, // Single node, 1KB messages, ~1MiB minimum
-		{3, 3, 10, 100_000}, // Cluster, R3, 10B messages, ~1MiB minimum
-		{3, 3, 1024, 1_000}, // Cluster, R3, 1KB messages, ~1MiB minimum
+		{1, 1, 10},   // Single node, 10B messages
+		{1, 1, 1024}, // Single node, 1KB messages
+		{3, 3, 10},   // Cluster, R3, 10B messages
+		{3, 3, 1024}, // Cluster, R3, 1KB messages
 	}
 
 	//Each of the cases above is run with each of the consumer types
@@ -294,11 +293,6 @@ func BenchmarkJetStreamConsume(b *testing.B) {
 					b.Run(
 						name,
 						func(b *testing.B) {
-							// Skip short runs, benchmark gets re-executed with a larger N
-							if b.N < bc.minMessages {
-								b.ResetTimer()
-								return
-							}
 
 							if verbose {
 								b.Logf("Running %s with %d messages", name, b.N)
