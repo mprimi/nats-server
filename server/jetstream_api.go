@@ -1620,7 +1620,9 @@ func (s *Server) jsStreamCreateRequest(sub *subscription, c *client, _ *Account,
 	}
 
 	// Hand off to cluster for processing.
+	fmt.Printf("Create stream request: %s\n", cfg.Name)
 	if s.JetStreamIsClustered() {
+		fmt.Printf("Create stream request: %s > handoff to cluster\n", cfg.Name)
 		s.jsClusteredStreamRequest(ci, acc, subject, reply, rmsg, &cfg)
 		return
 	}

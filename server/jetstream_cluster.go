@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -3387,6 +3388,7 @@ func (js *jetStream) processStreamLeaderChange(mset *stream, isLeader bool) {
 	var resp = JSApiStreamCreateResponse{ApiResponse: ApiResponse{Type: JSApiStreamCreateResponseType}}
 	if err != nil {
 		resp.Error = NewJSStreamCreateError(err, Unless(err))
+		fmt.Printf("[%s][processStreamLeaderChange()] Send API response (2) err: %s \n", js.srv.Name(), err)
 		s.sendAPIErrResponse(client, acc, subject, reply, _EMPTY_, s.jsonResponse(&resp))
 	} else {
 		msetCfg := mset.config()
@@ -3401,6 +3403,8 @@ func (js *jetStream) processStreamLeaderChange(mset *stream, isLeader bool) {
 		}
 		resp.DidCreate = true
 		s.sendAPIResponse(client, acc, subject, reply, _EMPTY_, s.jsonResponse(&resp))
+		fmt.Printf("[%s][processStreamLeaderChange()] Send API response (3)\n", js.srv.Name())
+
 		if node := mset.raftNode(); node != nil {
 			mset.sendCreateAdvisory()
 		}
@@ -3502,6 +3506,10 @@ func (js *jetStream) streamAssignment(account, stream string) (sa *streamAssignm
 
 // processStreamAssignment is called when followers have replicated an assignment.
 func (js *jetStream) processStreamAssignment(sa *streamAssignment) bool {
+
+	pcn, _, _, _ := runtime.Caller(1)
+	fmt.Printf("[%s] %s > processStreamAssignment(%s)\n", js.srv.Name(), runtime.FuncForPC(pcn).Name(), sa.Config.Name)
+
 	js.mu.Lock()
 	s, cc := js.srv, js.cluster
 	accName, stream := sa.Client.serviceAccount(), sa.Config.Name
@@ -3841,6 +3849,9 @@ func (js *jetStream) processClusterCreateStream(acc *Account, sa *streamAssignme
 		return
 	}
 
+	fptr, _, _, _ := runtime.Caller(1)
+	fmt.Printf("[%s][%s > processClusterCreateStream(%s)]\n", js.srv.Name(), runtime.FuncForPC(fptr).Name(), sa.Config.Name)
+
 	js.mu.RLock()
 	s, rg := js.srv, sa.Group
 	alreadyRunning := rg.node != nil
@@ -3898,6 +3909,7 @@ func (js *jetStream) processClusterCreateStream(acc *Account, sa *streamAssignme
 								Mirror:    mset.mirrorInfo(),
 								TimeStamp: time.Now().UTC(),
 							}
+							fmt.Printf("[%s][processClusterCreateStream()] Send API response \n", js.srv.Name())
 							s.sendAPIResponse(client, acc, subject, reply, _EMPTY_, s.jsonResponse(&resp))
 						}
 						return
@@ -3985,6 +3997,7 @@ func (js *jetStream) processClusterCreateStream(acc *Account, sa *streamAssignme
 
 		// Send response to the metadata leader. They will forward to the user as needed.
 		if result != nil {
+			fmt.Printf("[%s][processClusterCreateStream()] Send response to meta leader, err: %s\n", js.srv.Name(), err)
 			s.sendInternalMsgLocked(streamAssignmentSubj, _EMPTY_, nil, result)
 		}
 		return
@@ -5463,14 +5476,23 @@ func isInsufficientResourcesErr(resp *JSApiStreamCreateResponse) bool {
 // Process error results of stream and consumer assignments.
 // Success will be handled by stream leader.
 func (js *jetStream) processStreamAssignmentResults(sub *subscription, c *client, _ *Account, subject, reply string, msg []byte) {
+
 	var result streamAssignmentResult
 	if err := json.Unmarshal(msg, &result); err != nil {
 		// TODO(dlc) - log
 		return
 	}
+
+	fmt.Printf(" > [processStreamAssignmentResults()] Processing stream %s assignment result\n",
+		result.Stream,
+	)
+
 	acc, _ := js.srv.LookupAccount(result.Account)
 	if acc == nil {
 		// TODO(dlc) - log
+		fmt.Printf(" > [processStreamAssignmentResults()] Drop it like it's hot 1: %s\n",
+			result.Stream,
+		)
 		return
 	}
 
@@ -5479,6 +5501,10 @@ func (js *jetStream) processStreamAssignmentResults(sub *subscription, c *client
 
 	s, cc := js.srv, js.cluster
 	if cc == nil || cc.meta == nil {
+		fmt.Printf(" > [processStreamAssignmentResults()] Drop it like it's hot 2: %s\n",
+			result.Stream,
+		)
+		return
 		return
 	}
 
@@ -5489,16 +5515,37 @@ func (js *jetStream) processStreamAssignmentResults(sub *subscription, c *client
 
 	// FIXME(dlc) - suppress duplicates?
 	if sa := js.streamAssignment(result.Account, result.Stream); sa != nil {
+
 		canDelete := !result.Update && time.Since(sa.Created) < 5*time.Second
+
+		fmt.Printf(" > [%s] Processing stream %s assignment %v result (error: %s lacks resources? %v, can delete? %v)\n",
+			js.srv.Name(),
+			result.Stream,
+			sa.Group.Peers,
+			result.Response.ToError(),
+			isInsufficientResourcesErr(result.Response),
+			canDelete,
+		)
 
 		// See if we should retry in case this cluster is full but there are others.
 		if cfg, ci := sa.Config, sa.Client; cfg != nil && ci != nil && isInsufficientResourcesErr(result.Response) && canDelete {
+			fmt.Printf(" >>> Stream assignment, branch 0\n")
 			// If cluster is defined we can not retry.
 			if cfg.Placement == nil || cfg.Placement.Cluster == _EMPTY_ {
+				fmt.Printf(" >>> Stream assignment, branch 0-0\n")
 				// If we have additional clusters to try we can retry.
 				// We have already verified that ci != nil.
 				if len(ci.Alternates) > 0 {
+					fmt.Printf(" > [%s] Stream %s attempting alternate assignment\n",
+						js.srv.Name(),
+						result.Stream,
+					)
 					if rg, err := js.createGroupForStream(ci, cfg); err != nil {
+						fmt.Printf(" > [%s] Stream %s failed to create group: %s\n",
+							js.srv.Name(),
+							result.Stream,
+							err,
+						)
 						s.Warnf("Retrying cluster placement for stream '%s > %s' failed due to placement error: %+v", result.Account, result.Stream, err)
 					} else {
 						if org := sa.Group; org != nil && len(org.Peers) > 0 {
@@ -5507,6 +5554,11 @@ func (js *jetStream) processStreamAssignmentResults(sub *subscription, c *client
 						} else {
 							s.Warnf("Retrying cluster placement for stream '%s > %s' due to insufficient resources", result.Account, result.Stream)
 						}
+						fmt.Printf(
+							" >>> [%s] Stream assignment, delete previous and retry with: %v\n",
+							js.srv.Name(),
+							rg.Peers,
+						)
 						// Pick a new preferred leader.
 						rg.setPreferred()
 						// Get rid of previous attempt.
@@ -5516,8 +5568,14 @@ func (js *jetStream) processStreamAssignmentResults(sub *subscription, c *client
 						cc.meta.Propose(encodeAddStreamAssignment(sa))
 						return
 					}
+				} else {
+					fmt.Printf(" >>> Stream assignment, no alternates to try\n")
 				}
+			} else {
+				fmt.Printf(" >>> Stream assignment, static placement set\n")
 			}
+		} else {
+			fmt.Printf(" >>> Nil stream assignment\n")
 		}
 
 		// Respond to the user here.
@@ -5530,11 +5588,15 @@ func (js *jetStream) processStreamAssignmentResults(sub *subscription, c *client
 		if !sa.responded || result.Update {
 			sa.responded = true
 			js.srv.sendAPIErrResponse(sa.Client, acc, sa.Subject, sa.Reply, _EMPTY_, resp)
+			fmt.Printf(" >>> Responding to user: %s\n", resp)
 		}
+
 		// Remove this assignment if possible.
 		if canDelete {
 			sa.err = NewJSClusterNotAssignedError()
 			cc.meta.Propose(encodeDeleteStreamAssignment(sa))
+			fmt.Printf(" >>> Deleting assignment: %v\n", sa.Group.Peers)
+
 		}
 	}
 }
@@ -5837,10 +5899,12 @@ func (e *selectPeerError) accumulate(eAdd *selectPeerError) {
 // when peers exist already the unique tag prefix check for the replaceFirstExisting will be skipped
 // js lock should be held.
 func (cc *jetStreamCluster) selectPeerGroup(r int, cluster string, cfg *StreamConfig, existing []string, replaceFirstExisting int, ignore []string) ([]string, *selectPeerError) {
+
 	if cluster == _EMPTY_ || cfg == nil {
 		return nil, &selectPeerError{misc: true}
 	}
 
+	fmt.Printf(" >>> [selectPeerGroup()] Select peer group for stream: %s in cluster %s\n", cfg.Name, cluster)
 	var maxBytes uint64
 	if cfg.MaxBytes > 0 {
 		maxBytes = uint64(cfg.MaxBytes)
@@ -6018,6 +6082,7 @@ func (cc *jetStreamCluster) selectPeerGroup(r int, cluster string, cfg *StreamCo
 				if ni.cfg.MaxStore > int64(used) {
 					available = uint64(ni.cfg.MaxStore) - used
 				}
+				fmt.Printf(" >>> %s (%s): %dB available, %d assets\n", ni.name, p.ID, available, ni.stats.HAAssets)
 			}
 		}
 
@@ -6025,6 +6090,7 @@ func (cc *jetStreamCluster) selectPeerGroup(r int, cluster string, cfg *StreamCo
 		if maxBytes > 0 && maxBytes > available {
 			s.Warnf("Peer selection: discard %s@%s (Max Bytes: %d) exceeds available %s storage of %d bytes",
 				ni.name, ni.cluster, maxBytes, cfg.Storage.String(), available)
+			fmt.Printf(" >>> %s (%s): exclude because %d > %d\n", ni.name, p.ID, maxBytes, available)
 			err.noStorage = true
 			continue
 		}
@@ -6082,6 +6148,8 @@ func (cc *jetStreamCluster) selectPeerGroup(r int, cluster string, cfg *StreamCo
 	for _, r := range nodes[:r] {
 		results = append(results, r.id)
 	}
+
+	fmt.Printf(" >>> [selectPeerGroup()] Selected peer group for stream: %s in cluster %s: %v\n", cfg.Name, cluster, results)
 	return results, nil
 }
 
@@ -6143,11 +6211,13 @@ func (js *jetStream) createGroupForStream(ci *ClientInfo, cfg *StreamConfig) (*r
 	// Need to create a group here.
 	errs := &selectPeerError{}
 	for _, cn := range clusters {
+		fmt.Printf(" >> [createGroupForStream()] Selecting peers for %s\n", cfg.Name)
 		peers, err := cc.selectPeerGroup(replicas, cn, cfg, nil, 0, nil)
 		if len(peers) < replicas {
 			errs.accumulate(err)
 			continue
 		}
+		fmt.Printf(" >> [createGroupForStream()] Selected peers %s: %v\n", cfg.Name, peers)
 		return &raftGroup{Name: groupNameForStream(peers, cfg.Storage), Storage: cfg.Storage, Peers: peers, Cluster: cn}, nil
 	}
 	return nil, errs
@@ -6205,6 +6275,8 @@ func (s *Server) jsClusteredStreamRequest(ci *ClientInfo, acc *Account, subject,
 	if js == nil || cc == nil {
 		return
 	}
+
+	fmt.Printf(" > [jsClusteredStreamRequest()] Handling request: %s\n", config.Name)
 
 	var resp = JSApiStreamCreateResponse{ApiResponse: ApiResponse{Type: JSApiStreamCreateResponseType}}
 
@@ -6276,6 +6348,7 @@ func (s *Server) jsClusteredStreamRequest(ci *ClientInfo, acc *Account, subject,
 	}
 	// Create a new one here if needed.
 	if rg == nil {
+		fmt.Printf(" > [jsClusteredStreamRequest()] Creating group for stream: %s\n", cfg.Name)
 		nrg, err := js.createGroupForStream(ci, cfg)
 		if err != nil {
 			resp.Error = NewJSClusterNoPeersError(err)
@@ -6292,6 +6365,7 @@ func (s *Server) jsClusteredStreamRequest(ci *ClientInfo, acc *Account, subject,
 	}
 	// Sync subject for post snapshot sync.
 	sa := &streamAssignment{Group: rg, Sync: syncSubject, Config: cfg, Subject: subject, Reply: reply, Client: ci, Created: time.Now().UTC()}
+	fmt.Printf(" > [jsClusteredStreamRequest()] Proposing assignment for stream %s peers: %v\n", cfg.Name, rg.Peers)
 	if err := cc.meta.Propose(encodeAddStreamAssignment(sa)); err == nil {
 		// On success, add this as an inflight proposal so we can apply limits
 		// on concurrent create requests while this stream assignment has
@@ -7272,6 +7346,8 @@ func (s *Server) jsClusteredMsgDeleteRequest(ci *ClientInfo, acc *Account, mset 
 }
 
 func encodeAddStreamAssignment(sa *streamAssignment) []byte {
+	fmt.Printf(" >>>> streamAssignment: %+v\n", sa)
+	fmt.Printf(" >>>> group: %+v\n", sa.Group)
 	var bb bytes.Buffer
 	bb.WriteByte(byte(assignStreamOp))
 	json.NewEncoder(&bb).Encode(sa)

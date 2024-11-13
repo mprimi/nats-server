@@ -1430,6 +1430,8 @@ func TestJetStreamSuperClusterOverflowPlacement(t *testing.T) {
 }
 
 func TestJetStreamSuperClusterConcurrentOverflow(t *testing.T) {
+	// Create supercluster 3 clusters with 3-nodes each.
+	// MaxBytes is set to 2GB
 	sc := createJetStreamSuperClusterWithTemplate(t, jsClusterMaxBytesTempl, 3, 3)
 	defer sc.shutdown()
 
@@ -1439,6 +1441,8 @@ func TestJetStreamSuperClusterConcurrentOverflow(t *testing.T) {
 	var wg sync.WaitGroup
 	var swg sync.WaitGroup
 
+	// Create a stream with the given name
+	// With MaxBytes set to take the entire cluster capacity
 	start := func(name string) {
 		defer wg.Done()
 
@@ -1455,9 +1459,25 @@ func TestJetStreamSuperClusterConcurrentOverflow(t *testing.T) {
 			MaxBytes: 2 * 1024 * 1024 * 1024,
 		})
 		require_NoError(t, err)
+		fmt.Printf(" * Stream created: %s\n", name)
+
+		//_, err = js.AddStream(&nats.StreamConfig{
+		//	Name:     "bar",
+		//	Replicas: 3,
+		//	MaxBytes: 2 * 1024 * 1024 * 1024,
+		//})
+		//require_NoError(t, err)
+		//fmt.Printf(" * Stream created: %s\n", name)
+
 	}
+	//wg.Add(1)
+	//swg.Add(1)
 	wg.Add(2)
 	swg.Add(2)
+
+	// Create 2 streams simultaneously
+	//  - one should land in the target cluster
+	//  - one should get reassigned to a different cluster
 	go start("foo")
 	go start("bar")
 	swg.Wait()
