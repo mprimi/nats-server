@@ -4259,10 +4259,11 @@ func TestJetStreamClusterPreserveWALDuringCatchupWithMatchingTerm(t *testing.T) 
 				for i := uint64(0); i < 3; i++ {
 					// One server will be one behind and need to catchup.
 					if s.Name() == rs.Name() && i >= 2 {
+						fmt.Printf("[XXX][%s/%s] Skip last WAL AE\n", s.Name(), rn.ID())
 						break
 					}
 
-					fmt.Printf("[XXX] Node: %s storing WAL AE %d\n", s.Name(), i)
+					fmt.Printf("[XXX][%s/%s] storing WAL AE %d (%d/3)\n", s.Name(), rn.ID(), i, i+1)
 
 					esm := encodeStreamMsgAllowCompress("foo", "_INBOX.foo", nil, nil, i, ts, true, false)
 					entries := []*Entry{newEntry(EntryNormal, esm)}
@@ -4301,7 +4302,7 @@ func TestJetStreamClusterPreserveWALDuringCatchupWithMatchingTerm(t *testing.T) 
 			}
 			state := mset.state()
 			if state.Msgs != 3 || state.Bytes != 99 {
-				fmt.Printf("[XXX] Node: %s stream state: msgs: %d bytes: %d\n", s.Name(), state.Msgs, state.Bytes)
+				fmt.Printf("[XXX][%s/%s]: Messages: %d/%d bytes: %d/%d\n", s.Name(), s.ID(), state.Msgs, 3, state.Bytes, 99)
 				return fmt.Errorf("stream state didn't match, got %d messages with %d bytes", state.Msgs, state.Bytes)
 			}
 		}
@@ -4317,17 +4318,17 @@ func TestJetStreamClusterPreserveWALDuringCatchupWithMatchingTerm(t *testing.T) 
 		if rn.accName == globalAccountName {
 			ae, err := rn.loadEntry(2)
 			require_NoError(t, err)
-			fmt.Printf("[XXX] AE 2 leader: %s (expected == %s)\n", ae.leader, rn.ID())
+			fmt.Printf("[XXX][%s/%s] AE 2 leader: %s (expected: %s)\n", rs.Name(), rn.ID(), ae.leader, rn.ID())
 			require_True(t, ae.leader == rn.ID())
 
 			ae, err = rn.loadEntry(3)
 			require_NoError(t, err)
-			fmt.Printf("[XXX] AE 3 leader: %s (expected == %s)\n", ae.leader, rn.ID())
+			fmt.Printf("[XXX][%s/%s] AE 3 leader: %s (expected: %s)\n", rs.Name(), rn.ID(), ae.leader, rn.ID())
 			require_True(t, ae.leader == rn.ID())
 
 			ae, err = rn.loadEntry(4)
 			require_NoError(t, err)
-			fmt.Printf("[XXX] AE 4 leader: %s (expected != %s)\n", ae.leader, rn.ID())
+			fmt.Printf("[XXX][%s/%s]AE 4 leader: %s (expected: not %s)\n", rs.Name(), rn.ID(), ae.leader, rn.ID())
 			require_True(t, ae.leader != rn.ID())
 		}
 	}
