@@ -4243,8 +4243,11 @@ func TestJetStreamClusterPreserveWALDuringCatchupWithMatchingTerm(t *testing.T) 
 	nc.Close()
 	require_NoError(t, err)
 
+	fmt.Printf("[XXX] Stream leader: %s\n", c.streamLeader(globalAccountName, "TEST").Name())
+
 	// Pick one server that will only store a part of the messages in its WAL.
 	rs := c.randomNonStreamLeader(globalAccountName, "TEST")
+	fmt.Printf("[XXX] Random non leader node: %s\n", rs.Name())
 	ts := time.Now().UnixNano()
 
 	// Manually add 3 append entries to each node's WAL, except for one node who is one behind.
@@ -4258,6 +4261,8 @@ func TestJetStreamClusterPreserveWALDuringCatchupWithMatchingTerm(t *testing.T) 
 					if s.Name() == rs.Name() && i >= 2 {
 						break
 					}
+
+					fmt.Printf("[XXX] Node: %s storing WAL AE %d\n", s.Name(), i)
 
 					esm := encodeStreamMsgAllowCompress("foo", "_INBOX.foo", nil, nil, i, ts, true, false)
 					entries := []*Entry{newEntry(EntryNormal, esm)}
@@ -4279,6 +4284,8 @@ func TestJetStreamClusterPreserveWALDuringCatchupWithMatchingTerm(t *testing.T) 
 	c.waitOnAllCurrent()
 	c.waitOnStreamLeader(globalAccountName, "TEST")
 
+	fmt.Printf("[XXX] Stream leader after restart: %s\n", c.streamLeader(globalAccountName, "TEST").Name())
+
 	rs = c.serverByName(rs.Name())
 
 	// Check all servers ended up with all published messages, which had quorum.
@@ -4294,11 +4301,14 @@ func TestJetStreamClusterPreserveWALDuringCatchupWithMatchingTerm(t *testing.T) 
 			}
 			state := mset.state()
 			if state.Msgs != 3 || state.Bytes != 99 {
+				fmt.Printf("[XXX] Node: %s stream state: msgs: %d bytes: %d\n", s.Name(), state.Msgs, state.Bytes)
 				return fmt.Errorf("stream state didn't match, got %d messages with %d bytes", state.Msgs, state.Bytes)
 			}
 		}
 		return nil
 	})
+
+	fmt.Printf("[XXX] Stream leader before final check: %s\n", c.streamLeader(globalAccountName, "TEST").Name())
 
 	// Check that the first two published messages came from our WAL, and
 	// the last came from a catchup by another leader.
@@ -4307,14 +4317,17 @@ func TestJetStreamClusterPreserveWALDuringCatchupWithMatchingTerm(t *testing.T) 
 		if rn.accName == globalAccountName {
 			ae, err := rn.loadEntry(2)
 			require_NoError(t, err)
+			fmt.Printf("[XXX] AE 2 leader: %s (expected == %s)\n", ae.leader, rn.ID())
 			require_True(t, ae.leader == rn.ID())
 
 			ae, err = rn.loadEntry(3)
 			require_NoError(t, err)
+			fmt.Printf("[XXX] AE 3 leader: %s (expected == %s)\n", ae.leader, rn.ID())
 			require_True(t, ae.leader == rn.ID())
 
 			ae, err = rn.loadEntry(4)
 			require_NoError(t, err)
+			fmt.Printf("[XXX] AE 4 leader: %s (expected != %s)\n", ae.leader, rn.ID())
 			require_True(t, ae.leader != rn.ID())
 		}
 	}
