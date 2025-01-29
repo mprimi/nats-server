@@ -663,6 +663,290 @@ func BenchmarkJetStreamConsumeWithFilters(b *testing.B) {
 	}
 }
 
+func BenchmarkJetStreamSparseDirectGet(b *testing.B) {
+	const (
+		verbose          = true
+		streamName       = "S"
+		subjectPrefix    = "s"
+		seed             = 123456
+		publishBatchSize = 1000
+		publishTimeout   = 10 * time.Second
+	)
+
+	clusterSizeCases := []struct {
+		clusterSize int              // Single node or cluster
+		replicas    int              // Stream replicas
+		storage     nats.StorageType // Stream storage
+	}{
+		{1, 1, nats.MemoryStorage},
+		{3, 3, nats.MemoryStorage},
+	}
+
+	benchmarksCases := []struct {
+		subjects            int // Number of distinct subjects
+		messages            int // Number of messages published
+		messageSize         int // Size of each message
+		concurrentConsumers int // Number of consumers doing get
+	}{
+		{1_000, 0, 100, 4},
+		{1_000, 1_000_000, 100, 4},
+	}
+
+	for _, cs := range clusterSizeCases {
+		name := fmt.Sprintf(
+			"N=%d,R=%d,storage=%s",
+			cs.clusterSize,
+			cs.replicas,
+			cs.storage.String(),
+		)
+		b.Run(
+			name,
+			func(b *testing.B) {
+
+				for _, bc := range benchmarksCases {
+
+					name := fmt.Sprintf(
+						"Subjs=%d,M=%d,MsgSz=%d,C=%d",
+						bc.subjects,
+						bc.messages,
+						bc.messageSize,
+						bc.concurrentConsumers,
+					)
+
+					b.Run(
+						name,
+						func(b *testing.B) {
+
+							cl, s, shutdown, nc, js := startJSClusterAndConnect(b, cs.clusterSize)
+							defer shutdown()
+							defer nc.Close()
+
+							if verbose {
+								b.Logf("Creating stream with R=%d", cs.replicas)
+							}
+							streamConfig := &nats.StreamConfig{
+								Name:      streamName,
+								Subjects:  []string{subjectPrefix + ".>"},
+								Storage:   cs.storage,
+								Retention: nats.LimitsPolicy,
+
+								MaxAge:            time.Hour,
+								Duplicates:        10 * time.Second,
+								Discard:           nats.DiscardOld,
+								NoAck:             false,
+								MaxMsgs:           -1,
+								MaxBytes:          -1,
+								MaxConsumers:      -1,
+								Replicas:          1, //TODO
+								MaxMsgsPerSubject: 1,
+							}
+							if _, err := js.AddStream(streamConfig); err != nil {
+								b.Fatalf("Error creating stream: %v", err)
+							}
+
+							// If replicated resource, connect to stream leader for lower variability
+							connectURL := s.ClientURL()
+							if cs.replicas > 1 {
+								connectURL = cl.streamLeader("$G", streamName).ClientURL()
+								nc.Close()
+								_, js = jsClientConnectURL(b, connectURL)
+							}
+
+							rng := rand.New(rand.NewSource(int64(seed)))
+							message := make([]byte, bc.messageSize)
+
+							// Publish one message per subject
+							for i := 1; i <= bc.subjects; i++ {
+								subject := fmt.Sprintf("%s.%d", subjectPrefix, i)
+								rng.Read(message)
+								_, err := js.Publish(subject, message)
+								require_NoError(b, err)
+							}
+
+							// Publish additional messages to random subject
+							// Given the MaxMsgsPerSubject=1, this will create a lot of interior deletes
+
+							for i := 0; i < bc.messages; i++ {
+								subject := fmt.Sprintf("%s.%d", subjectPrefix, 1+rng.Intn(bc.subjects))
+								rng.Read(message)
+								_, err := js.Publish(subject, message)
+								require_NoError(b, err)
+							}
+
+							published := 0
+							pending := make([]nats.PubAckFuture, 0, publishBatchSize)
+							for i := 1; i <= bc.messages; i++ {
+								rng.Read(message)
+								subject := fmt.Sprintf("%s.%d", subjectPrefix, 1+rng.Intn(bc.subjects))
+								pubAckFuture, err := js.PublishAsync(subject, message)
+								require_NoError(b, err)
+								pending = append(pending, pubAckFuture)
+
+								// Wait for all pending to be published before trying to publish the next batch
+								if len(pending) == publishBatchSize || i == bc.messages {
+									select {
+									case <-js.PublishAsyncComplete():
+										// Continue below
+									case <-time.After(publishTimeout):
+										b.Fatalf("Publish timed out")
+									}
+
+									for _, future := range pending {
+										select {
+										case <-future.Ok():
+											published += 1
+										case err := <-future.Err():
+											require_NoError(b, err)
+										default:
+											b.Fatalf("Invalid publish future state")
+										}
+									}
+									pending = make([]nats.PubAckFuture, 0, publishBatchSize)
+									if verbose {
+										b.Logf("Published %d/%d messages", published, bc.messages)
+									}
+								}
+							}
+
+							consumeOneMessage := func(js nats.JetStreamContext, rng *rand.Rand) {
+								subject := fmt.Sprintf("%s.%d", subjectPrefix, 1+rng.Intn(bc.subjects))
+
+								sub, err := js.PullSubscribe(subject, "", nats.BindStream(streamName))
+								require_NoError(b, err)
+								defer sub.Unsubscribe()
+
+								msgs, err := sub.Fetch(1, nats.MaxWait(5*time.Second))
+								require_NoError(b, err)
+								require_Equal(b, len(msgs), 1)
+								require_Equal(b, msgs[0].Subject, subject)
+							}
+							/*
+								// Each call to 'subscribe_consume_unsubscribe' is one benchmark operation.
+								// i.e. subscribe_consume_unsubscribe will be called a total of b.N times (split among C threads)
+								// Each operation consists of:
+								// - Create filter
+								// - Create consumer / Subscribe
+								// - Consume expected number of messages
+								// - Unsubscribe
+								subscribeConsumeUnsubscribe := func(js nats.JetStreamContext, rng *rand.Rand) {
+
+									// Select F unique domains to create F non-overlapping filters
+									filterDomains := make(map[string]bool, bc.filters)
+									filters := make([]string, 0, bc.filters)
+									for len(filterDomains) < bc.filters {
+										domain := domains[rng.Intn(len(domains))]
+										if _, found := filterDomains[domain]; found {
+											// Collision with existing filter, try again
+											continue
+										}
+										filterDomains[domain] = true
+										filters = append(filters, fmt.Sprintf("%s.%s.>", subjectPrefix, domain))
+									}
+
+									if verbose {
+										b.Logf("Subscribe with filters: %+v", filters)
+									}
+
+									// Consumer callback
+									received := 0
+									consumeWg := sync.WaitGroup{}
+									consumeWg.Add(1)
+									cb := func(msg *nats.Msg) {
+										received += 1
+										if received == messagesPerIteration {
+											consumeWg.Done()
+											if verbose {
+												b.Logf("Received %d/%d messages", received, messagesPerIteration)
+											}
+										}
+									}
+
+									// Create consumer
+									subOpts := []nats.SubOpt{
+										nats.BindStream(streamName),
+										nats.OrderedConsumer(),
+										nats.ConsumerReplicas(consumerReplicas),
+										nats.ConsumerFilterSubjects(filters...),
+										nats.ConsumerMemoryStorage(),
+									}
+
+									var sub *nats.Subscription
+
+									sub, err := js.Subscribe("", cb, subOpts...)
+									if err != nil {
+										b.Fatalf("Failed to subscribe: %s", err)
+									}
+
+									defer func(sub *nats.Subscription) {
+										err := sub.Unsubscribe()
+										if err != nil {
+											b.Logf("Failed to unsubscribe: %s", err)
+										}
+									}(sub)
+
+									consumeWg.Wait()
+								}
+							*/
+							// Wait for all consumer threads and main to be ready
+							wgReady := sync.WaitGroup{}
+							wgReady.Add(bc.concurrentConsumers + 1)
+							// Wait until all consumer threads have completed
+							wgCompleted := sync.WaitGroup{}
+							wgCompleted.Add(bc.concurrentConsumers)
+							// Operations left for consumer threads
+							opsCount := atomic.Int32{}
+							opsCount.Store(int32(b.N))
+
+							// Start a pool of C goroutines, each one with a dedicated connection.
+							for i := 1; i <= bc.concurrentConsumers; i++ {
+								go func(consumerId int) {
+
+									// Connect
+									nc, js := jsClientConnectURL(b, connectURL)
+									defer nc.Close()
+
+									// Signal completion of work
+									defer wgCompleted.Done()
+
+									rng := rand.New(rand.NewSource(int64(seed + consumerId)))
+
+									// Ready, wait for everyone else
+									wgReady.Done()
+									wgReady.Wait()
+
+									completed := 0
+									for opsCount.Add(-1) >= 0 {
+										consumeOneMessage(js, rng)
+										completed += 1
+									}
+									if verbose {
+										b.Logf("Consumer thread %d completed %d of %d operations", consumerId, completed, b.N)
+									}
+								}(i)
+							}
+
+							// Wait for all consumers to be ready
+							wgReady.Done()
+							wgReady.Wait()
+
+							// Start measuring time
+							b.ResetTimer()
+
+							// Wait for consumers to have chewed through b.N operations
+							wgCompleted.Wait()
+							b.StopTimer()
+
+							// Throughput is not very important in this benchmark since each operation includes
+							// subscribe, unsubscribe and retrieves just a few bytes
+							b.SetBytes(int64(bc.messageSize))
+						},
+					)
+				}
+			},
+		)
+	}
+}
+
 func BenchmarkJetStreamPublish(b *testing.B) {
 
 	const (
